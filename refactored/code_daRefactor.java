@@ -1,111 +1,157 @@
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.io.*;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.UUID;
-import org.json.simple.JSONArray;
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.ParseException;
+import java.util.*;
+import org.json.simple.*;
+import org.json.simple.parser.*;
 
-public class PersonalTaskManager {
+class ValidationResult {
+    boolean valid;
+    String message;
 
+    ValidationResult(boolean valid, String message) {
+        this.valid = valid;
+        this.message = message;
+    }
+}
+
+class ErrorHandler {
+    static void logError(String msg) {
+        System.err.println(msg);
+    }
+}
+
+class Task {
+    int id;
+    String title, description, dueDate, priority, status, createdAt, updatedAt;
+
+    Task(int id, String title, String description, String dueDate, String priority) {
+        this.id = id;
+        this.title = title;
+        this.description = description;
+        this.dueDate = dueDate;
+        this.priority = priority;
+        this.status = "Chưa hoàn thành";
+        this.createdAt = LocalDateTime.now().toString();
+        this.updatedAt = this.createdAt;
+    }
+
+    JSONObject toJSON() {
+        JSONObject obj = new JSONObject();
+        obj.put("id", id);
+        obj.put("title", title);
+        obj.put("description", description);
+        obj.put("due_date", dueDate);
+        obj.put("priority", priority);
+        obj.put("status", status);
+        obj.put("created_at", createdAt);
+        obj.put("last_updated_at", updatedAt);
+        return obj;
+    }
+}
+
+class TaskDAO {
     private static final String DB_FILE_PATH = "tasks_database.json";
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
-    private boolean isEmpty(String input) {
-        return input == null || input.trim().isEmpty();
-    }
-
-    private boolean isValidDate(String dateStr) {
-        try {
-            LocalDate.parse(dateStr, DATE_FORMATTER);
-            return true;
-        } catch (DateTimeParseException e) {
-            return false;
-        }
-    }
-
-    private boolean isValidPriority(String priority) {
-        String[] validPriorities = {"Thấp", "Trung bình", "Cao"};
-        for (String p : validPriorities) {
-            if (p.equals(priority)) return true;
-        }
-        return false;
-    }
-
-    private JSONArray loadTasksFromDb() {
+    static JSONArray loadTasks() {
         JSONParser parser = new JSONParser();
         try (FileReader reader = new FileReader(DB_FILE_PATH)) {
             Object obj = parser.parse(reader);
-            if (obj instanceof JSONArray) {
-                return (JSONArray) obj;
-            }
-        } catch (IOException | ParseException e) {
+            if (obj instanceof JSONArray) return (JSONArray) obj;
+        } catch (Exception e) {
+            ErrorHandler.logError("Lỗi khi đọc DB: " + e.getMessage());
         }
         return new JSONArray();
     }
 
-    private void saveTasksToDb(JSONArray tasks) {
-        try (FileWriter file = new FileWriter(DB_FILE_PATH)) {
-            file.write(tasks.toJSONString());
-            file.flush();
+    static void saveTasks(JSONArray tasks) {
+        try (FileWriter writer = new FileWriter(DB_FILE_PATH)) {
+            writer.write(tasks.toJSONString());
         } catch (IOException e) {
+            ErrorHandler.logError("Lỗi khi ghi DB: " + e.getMessage());
+        }
+    }
+}
+
+class TaskValidator {
+    static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    static ValidationResult validateTitle(String title) {
+        if (title == null || title.trim().isEmpty())
+            return new ValidationResult(false, "Tiêu đề không được để trống.");
+        return new ValidationResult(true, "");
+    }
+
+    static ValidationResult validateDate(String dateStr) {
+        try {
+            LocalDate.parse(dateStr, DATE_FORMATTER);
+            return new ValidationResult(true, "");
+        } catch (Exception e) {
+            return new ValidationResult(false, "Ngày không hợp lệ. Định dạng: yyyy-MM-dd");
         }
     }
 
-    private boolean isDuplicateTask(JSONArray tasks, String title, String dueDateStr) {
-        for (Object obj : tasks) {
-            JSONObject task = (JSONObject) obj;
-            if (task.get("title").toString().equalsIgnoreCase(title) &&
-                task.get("due_date").toString().equals(dueDateStr)) {
+    static ValidationResult validatePriority(String priority) {
+        List<String> valid = Arrays.asList("Thấp", "Trung bình", "Cao");
+        if (!valid.contains(priority))
+            return new ValidationResult(false, "Mức ưu tiên không hợp lệ. Chọn Thấp/Trung bình/Cao.");
+        return new ValidationResult(true, "");
+    }
+
+    static boolean isDuplicate(JSONArray tasks, String title, String dueDate) {
+        for (Object o : tasks) {
+            JSONObject t = (JSONObject) o;
+            if (t.get("title").toString().equalsIgnoreCase(title) &&
+                t.get("due_date").toString().equals(dueDate))
                 return true;
-            }
         }
         return false;
     }
+}
 
-    private JSONObject createTaskJson(String title, String description, LocalDate dueDate, String priority) {
-        JSONObject task = new JSONObject();
-        String id = UUID.randomUUID().toString();
-        String dateStr = dueDate.format(DATE_FORMATTER);
-        String now = LocalDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME);
-        task.put("id", id);
-        task.put("title", title);
-        task.put("description", description);
-        task.put("due_date", dateStr);
-        task.put("priority", priority);
-        task.put("status", "Chưa hoàn thành");
-        task.put("created_at", now);
-        task.put("last_updated_at", now);
-        return task;
-    }
+public class PersonalTaskManagerRefactored {
+    public JSONObject addTask(String title, String description, String dueDateStr, String priority) {
+        ValidationResult r;
 
-    public JSONObject addNewTask(String title, String description, String dueDateStr, String priority) {
-        if (isEmpty(title) || isEmpty(dueDateStr)) return null;
-        if (!isValidDate(dueDateStr)) return null;
-        if (!isValidPriority(priority)) return null;
+        r = TaskValidator.validateTitle(title);
+        if (!r.valid) {
+            ErrorHandler.logError(r.message);
+            return null;
+        }
 
-        LocalDate dueDate = LocalDate.parse(dueDateStr, DATE_FORMATTER);
-        JSONArray tasks = loadTasksFromDb();
+        r = TaskValidator.validateDate(dueDateStr);
+        if (!r.valid) {
+            ErrorHandler.logError(r.message);
+            return null;
+        }
 
-        if (isDuplicateTask(tasks, title, dueDateStr)) return null;
+        r = TaskValidator.validatePriority(priority);
+        if (!r.valid) {
+            ErrorHandler.logError(r.message);
+            return null;
+        }
 
-        JSONObject newTask = createTaskJson(title, description, dueDate, priority);
-        tasks.add(newTask);
-        saveTasksToDb(tasks);
-        return newTask;
+        JSONArray tasks = TaskDAO.loadTasks();
+
+        if (TaskValidator.isDuplicate(tasks, title, dueDateStr)) {
+            ErrorHandler.logError("Nhiệm vụ đã tồn tại với cùng ngày.");
+            return null;
+        }
+
+        int id = tasks.size() + 1; // Thay UUID bằng số nguyên tăng dần
+        Task task = new Task(id, title, description, dueDateStr, priority);
+        tasks.add(task.toJSON());
+        TaskDAO.saveTasks(tasks);
+
+        System.out.println("Thêm thành công với ID: " + id);
+        return task.toJSON();
     }
 
     public static void main(String[] args) {
-        PersonalTaskManager manager = new PersonalTaskManager();
-        manager.addNewTask("Mua sách", "Sách Công nghệ phần mềm.", "2025-07-20", "Cao");
-        manager.addNewTask("Tập thể dục", "Tập gym 1 tiếng.", "2025-07-21", "Trung bình");
-        manager.addNewTask("", "Không có tiêu đề", "2025-07-22", "Thấp");
-        manager.addNewTask("Mua sách", "Sách Công nghệ phần mềm.", "2025-07-20", "Cao");
+        PersonalTaskManagerRefactored manager = new PersonalTaskManagerRefactored();
+        manager.addTask("Mua sách", "Sách Java", "2025-07-20", "Cao");
+        manager.addTask("Mua sách", "Sách Java", "2025-07-20", "Cao");
+        manager.addTask("", "Không tiêu đề", "2025-07-22", "Thấp");
     }
 }
-// Thêm class ValidationResult để gom lỗi va
+a
